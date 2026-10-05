@@ -10,11 +10,11 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 58890e59b5843784dada5163935b4606, type: 3}
-  m_Name: SolidSphereType
+  m_Name: BouncySphereType
   m_EditorClassIdentifier: 
-  stiffness: 2000
-  maxSinkDepth: 0.05
-  minReboundSpeed: 99
+  stiffness: 80
+  maxSinkDepth: 0.8
+  minReboundSpeed: 2
   settleTime: 0.1
-  releaseSpeed: 5
+  releaseSpeed: 8
   material: {fileID: 13400000, guid: 359112a3f1db70c4caceacb5634c5c7c, type: 2}
