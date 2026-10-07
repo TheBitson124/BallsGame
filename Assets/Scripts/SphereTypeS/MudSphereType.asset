@@ -12,9 +12,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 58890e59b5843784dada5163935b4606, type: 3}
   m_Name: MudSphereType
   m_EditorClassIdentifier: 
-  stiffness: 20
-  maxSinkDepth: 10
+  stiffness: 1
+  maxSinkDepth: 5
+  neighborFalloff: 0.63
+  damping: 8
+  sphereMass: 0.1
+  bounceRestitution: 0
+  bounceMinLandingSpeed: 2
   minReboundSpeed: 99
   settleTime: 3
-  releaseSpeed: 0.3
+  releaseSpeed: 300
   material: {fileID: 13400000, guid: 359112a3f1db70c4caceacb5634c5c7c, type: 2}

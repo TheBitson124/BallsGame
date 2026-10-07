@@ -23,7 +23,11 @@ public class GridSpawner : MonoBehaviour
                 GameObject obj = Instantiate(spherePrefab, transform);
                 obj.transform.localPosition = spawnPos;
                 obj.name = $"Sphere_{x}_{z}";
-                obj.GetComponent<GroundSphere>().SetType(sphereType);
+                // Works with both the old GroundSphere prefab and the physics SpringSphere prefab
+                if (obj.TryGetComponent<SpringSphere>(out var springSphere))
+                    springSphere.SetType(sphereType);
+                else
+                    obj.GetComponent<GroundSphere>().SetType(sphereType);
             }
         }
     }

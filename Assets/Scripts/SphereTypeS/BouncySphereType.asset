@@ -12,9 +12,14 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 58890e59b5843784dada5163935b4606, type: 3}
   m_Name: BouncySphereType
   m_EditorClassIdentifier: 
-  stiffness: 80
-  maxSinkDepth: 0.8
+  stiffness: 50
+  maxSinkDepth: 2
+  neighborFalloff: 0.714
+  damping: 0.1
+  sphereMass: 0.05
+  bounceRestitution: 1.1
+  bounceMinLandingSpeed: 1
   minReboundSpeed: 2
   settleTime: 0.1
-  releaseSpeed: 8
-  material: {fileID: 13400000, guid: 359112a3f1db70c4caceacb5634c5c7c, type: 2}
+  releaseSpeed: 20
+  material: {fileID: 13400000, guid: be7e1a8369c372849849055b5f7c8f76, type: 2}

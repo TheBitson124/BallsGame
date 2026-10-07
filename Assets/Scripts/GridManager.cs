@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// Runs before the player so the player can ride this frame's sphere movement (GroundDeltaY)
+// Runs before the player so the player can ride this frame's sphere movement (AddGroundDelta)
 [DefaultExecutionOrder(-10)]
 public class GroundGridManager : MonoBehaviour
 {
@@ -18,9 +18,10 @@ public class GroundGridManager : MonoBehaviour
     private Phase phase = Phase.Idle;
     private SphereTypeScriptableObject contactType;
     private Vector3 center;
+    private Vector3 pushAxis = Vector3.down;   // direction the dip goes into the surface
     private float centerDepth;
 
-    // Contact solution, calculated once from the entry speed
+    // Contact solution, calculated once from the entry velocity
     private float startDepth;
     private float staticDepth;
     private float maxDepth;
@@ -29,7 +30,8 @@ public class GroundGridManager : MonoBehaviour
     private float reboundSpeed;
     private float timer;
 
-    private Collider[] hitBuffer = new Collider[64];
+    // Large enough for where grids meet (e.g. floor + wall corner); overflow silently drops spheres
+    private Collider[] hitBuffer = new Collider[256];
     private HashSet<GroundSphere> activeSpheres = new HashSet<GroundSphere>();
     private List<GroundSphere> restedSpheres = new List<GroundSphere>();
 
@@ -43,17 +45,29 @@ public class GroundGridManager : MonoBehaviour
         if (playerController) playerController.SphereContact -= OnSphereContact;
     }
 
-    private void OnSphereContact(GroundSphere sphere, float entrySpeed)
+    private void OnSphereContact(GroundSphere sphere, Vector3 entryVelocity)
     {
+        // Several grids listen to the same player; only react to our own spheres
+        if (sphere.transform.parent != transform) return;
+
+        // The grid lies in this transform's local XZ plane, so the dip goes along transform.up.
+        // The side the pusher is on decides the direction: from above pushes down, from below up.
+        // (Contact normals can't be trusted for this: hitting a sphere's side gives a sideways normal.)
+        Vector3 normal = transform.up;
+        float side = Vector3.Dot(player.position - sphere.transform.position, normal);
+        pushAxis = side >= 0f ? -normal : normal;
+
         contactType = sphere.sphereType;
 
         float mass = playerController.mass;
-        float g = -playerController.gravity;
         float k = contactType.stiffness;
         float springTime = Mathf.Sqrt(mass / k);
+        float entrySpeed = Mathf.Max(0f, Vector3.Dot(entryVelocity, pushAxis));
+        // Only the part of gravity pressing into the surface counts: full on floors, none on walls
+        float weightAccel = Mathf.Max(0f, Vector3.Dot(Vector3.up * playerController.gravity, pushAxis));
 
         // Weight alone sinks to staticDepth; the entry speed adds the impact sink on top
-        staticDepth = Mathf.Min(mass * g / k, contactType.maxSinkDepth);
+        staticDepth = Mathf.Min(mass * weightAccel / k, contactType.maxSinkDepth);
         maxDepth = Mathf.Min(staticDepth + entrySpeed * springTime, contactType.maxSinkDepth);
         compressTime = Mathf.PI * 0.5f * springTime; // quarter of a spring oscillation
         settleRate = (maxDepth - staticDepth) / contactType.settleTime;
@@ -74,10 +88,10 @@ public class GroundGridManager : MonoBehaviour
         float prevDepth = centerDepth;
 
         // Player left the spheres (jumped, launched, walked off): let the dip spring back
-        if (phase != Phase.Idle && phase != Phase.Release && !playerController.OnSphere)
+        if (phase != Phase.Idle && phase != Phase.Release && !playerController.IsTouching(transform))
             phase = Phase.Release;
 
-        // The dip follows the player while he stands on it
+        // The dip follows the player while he touches it
         if (phase != Phase.Idle && phase != Phase.Release)
             center = player.position;
 
@@ -91,7 +105,8 @@ public class GroundGridManager : MonoBehaviour
                 {
                     if (reboundSpeed > 0f)
                     {
-                        playerController.Launch(reboundSpeed);
+                        // Throw the player back out of the surface
+                        playerController.Launch(-pushAxis * reboundSpeed);
                         phase = Phase.Release;
                     }
                     else
@@ -116,9 +131,9 @@ public class GroundGridManager : MonoBehaviour
                 break;
         }
 
-        // Carry the player with the surface while he's standing on it
+        // Carry the player with the surface while he touches it
         if (phase != Phase.Idle && phase != Phase.Release)
-            playerController.GroundDeltaY = prevDepth - centerDepth;
+            playerController.AddGroundDelta(pushAxis * (centerDepth - prevDepth));
 
         if (phase != Phase.Idle)
             GatherNearby(center);
@@ -131,7 +146,7 @@ public class GroundGridManager : MonoBehaviour
         restedSpheres.Clear();
         foreach (var sphere in activeSpheres)
         {
-            if (sphere.MoveToDepth(centerDepth * Influence(sphere), riseSpeed))
+            if (sphere.MoveToDepth(centerDepth * Influence(sphere), pushAxis, riseSpeed))
                 restedSpheres.Add(sphere);
         }
 
@@ -145,22 +160,21 @@ public class GroundGridManager : MonoBehaviour
         Physics.SyncTransforms();
     }
 
-    // Adds spheres around pos to the active set (zero allocation query)
+    // Adds this grid's spheres around pos to the active set (zero allocation query)
     private void GatherNearby(Vector3 pos)
     {
         int hitCount = Physics.OverlapSphereNonAlloc(pos, effectRadius, hitBuffer, sphereLayer);
         for (int i = 0; i < hitCount; i++)
         {
-            if (hitBuffer[i].TryGetComponent<GroundSphere>(out var sphere))
+            if (hitBuffer[i].TryGetComponent<GroundSphere>(out var sphere) && sphere.transform.parent == transform)
                 activeSpheres.Add(sphere);
         }
     }
 
-    // 1 at the dip center, smoothly falling to 0 at effectRadius
+    // 1 at the dip center, smoothly falling to 0 at effectRadius, measured along the grid surface
     private float Influence(GroundSphere sphere)
     {
-        Vector3 p = sphere.transform.position;
-        Vector2 offset = new Vector2(p.x - center.x, p.z - center.z);
+        Vector3 offset = Vector3.ProjectOnPlane(sphere.transform.position - center, pushAxis);
         float x = Mathf.Clamp01(1f - offset.magnitude / effectRadius);
         return x * x * (3f - 2f * x);
     }

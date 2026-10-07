@@ -13,8 +13,9 @@ GameObject:
   - component: {fileID: 4678166519368965847}
   - component: {fileID: 368634671849423999}
   - component: {fileID: 2203752603716185912}
+  - component: {fileID: 5108260379245617324}
   m_Layer: 8
-  m_Name: GroundSpherePrefab
+  m_Name: SpringSpherePrefab
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -30,7 +31,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 17.00285, y: -20.005411, z: -8.068569}
-  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_LocalScale: {x: 0.75, y: 0.75, z: 0.75}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
@@ -115,11 +116,34 @@ MonoBehaviour:
   m_GameObject: {fileID: 655346667083948489}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e846297487d93c04fb9b2c2514110d08, type: 3}
+  m_Script: {fileID: 11500000, guid: 42cc7a163a53a3b418295e55143518a9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  stats:
-    type: 1
-    sinkF: 0.5
-    springF: 0.5
-  basePos: {x: 0, y: 0, z: 0}
+  sphereType: {fileID: 0}
+--- !u!54 &5108260379245617324
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 655346667083948489}
+  serializedVersion: 4
+  m_Mass: 0.1
+  m_Drag: 0
+  m_AngularDrag: 0.05
+  m_CenterOfMass: {x: 0, y: 0, z: 0}
+  m_InertiaTensor: {x: 1, y: 1, z: 1}
+  m_InertiaRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ImplicitCom: 1
+  m_ImplicitTensor: 1
+  m_UseGravity: 0
+  m_IsKinematic: 1
+  m_Interpolate: 1
+  m_Constraints: 112
+  m_CollisionDetection: 0

@@ -18,20 +18,21 @@ public class SimplePlayerController : MonoBehaviour
     [Header("Grid Influence")]
     [Tooltip("Read by GroundGridManager: weight-only sink = mass * g / stiffness")]
     public float mass = 1.0f;
+    [Tooltip("How fast sideways launch momentum fades, in m/s per second")]
+    public float momentumDrag = 5.0f;
 
-    // Fired once when the player first touches a sphere; passes the sphere and the
-    // downward entry speed (m/s, 0 when walking on rather than falling on)
-    public event System.Action<GroundSphere, float> SphereContact;
-    public bool OnSphere => onSphere;
-    // Vertical movement of the surface under the player this frame; set by GroundGridManager
-    public float GroundDeltaY { get; set; }
+    // Fired once when the player first touches a sphere grid; passes the sphere hit
+    // and the player's velocity at contact
+    public event System.Action<GroundSphere, Vector3> SphereContact;
 
     private CharacterController controller;
     private float cameraPitch = 0.0f;
     private float verticalVelocity = 0.0f;
-    private bool onSphere;        // stood on a GroundSphere after the last Move
-    private bool touchedSphere;   // collecting during the current Move
-    private float entrySpeed;
+    private Vector3 externalVelocity;   // momentum from launches, fades out
+    private Vector3 groundDelta;        // movement of the surfaces we touch this frame
+    private Vector3 entryVelocity;
+    private List<Transform> touchedGrids = new List<Transform>();   // touched during the last Move
+    private List<Transform> touchingGrids = new List<Transform>();  // collecting during the current Move
 
     void Start()
     {
@@ -89,31 +90,58 @@ public class SimplePlayerController : MonoBehaviour
             verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity);
         }
 
-        // Only a fall counts as entry speed; walking onto spheres is weight only
-        entrySpeed = controller.isGrounded ? 0f : Mathf.Max(0f, -verticalVelocity);
-        touchedSphere = false;
+        externalVelocity = Vector3.MoveTowards(externalVelocity, Vector3.zero, momentumDrag * Time.deltaTime);
 
-        // Combine horizontal movement with gravity, plus the surface moving under us
-        Vector3 finalVelocity = (moveDirection * moveSpeed) + (Vector3.up * verticalVelocity);
-        controller.Move(finalVelocity * Time.deltaTime + Vector3.up * GroundDeltaY);
-        GroundDeltaY = 0f;
+        // Input can steer around launch momentum but not push against it,
+        // otherwise holding forward cancels a bounce off a wall
+        Vector3 inputVelocity = moveDirection * moveSpeed;
+        if (externalVelocity.sqrMagnitude > 0.0001f)
+        {
+            Vector3 launchDir = externalVelocity.normalized;
+            float against = Vector3.Dot(inputVelocity, launchDir);
+            if (against < 0f) inputVelocity -= launchDir * against;
+        }
+        Vector3 horizontalVelocity = inputVelocity + externalVelocity;
 
-        onSphere = touchedSphere;
+        // Velocity we hit surfaces with; the small grounding force doesn't count as a hit
+        entryVelocity = horizontalVelocity + Vector3.up * (controller.isGrounded ? 0f : verticalVelocity);
+        touchingGrids.Clear();
+
+        // Combine horizontal movement with gravity, plus the surfaces moving under us
+        Vector3 finalVelocity = horizontalVelocity + Vector3.up * verticalVelocity;
+        controller.Move(finalVelocity * Time.deltaTime + groundDelta);
+        groundDelta = Vector3.zero;
+
+        // This Move's contacts become "last Move" for the next frame
+        (touchedGrids, touchingGrids) = (touchingGrids, touchedGrids);
     }
 
     void OnControllerColliderHit(ControllerColliderHit hit)
     {
-        if (touchedSphere || hit.normal.y < 0.5f) return;
         if (!hit.collider.TryGetComponent<GroundSphere>(out var sphere)) return;
 
-        touchedSphere = true;
-        if (!onSphere)
-            SphereContact?.Invoke(sphere, entrySpeed);
+        Transform grid = sphere.transform.parent;
+        if (touchingGrids.Contains(grid)) return;
+
+        touchingGrids.Add(grid);
+        if (!touchedGrids.Contains(grid))
+            SphereContact?.Invoke(sphere, entryVelocity);
     }
 
-    // Throws the player upwards, e.g. on a sphere rebound
-    public void Launch(float upSpeed)
+    // True while the player touches any sphere of this grid
+    public bool IsTouching(Transform grid) => touchedGrids.Contains(grid);
+
+    // Moves the player along with a surface he touches; summed over all grids each frame
+    public void AddGroundDelta(Vector3 delta) => groundDelta += delta;
+
+    // Replaces the player's speed along the launch direction, keeps the rest
+    public void Launch(Vector3 velocity)
     {
-        verticalVelocity = upSpeed;
+        Vector3 dir = velocity.normalized;
+        Vector3 current = externalVelocity + Vector3.up * verticalVelocity;
+        current += velocity - dir * Vector3.Dot(current, dir);
+
+        verticalVelocity = current.y;
+        externalVelocity = new Vector3(current.x, 0f, current.z);
     }
 }

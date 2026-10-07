@@ -6,6 +6,7 @@ public class GroundSphere : MonoBehaviour
     public SphereTypeScriptableObject sphereType;
     public Vector3 basePos;
     private float depth;
+    private Vector3 pushDir;
     private SphereCollider sphereCollider;
 
     void Awake()
@@ -27,15 +28,23 @@ public class GroundSphere : MonoBehaviour
         sphereCollider.sharedMaterial = sphereType.material;
     }
 
-    // Follows a deeper target immediately; rises toward a shallower one at riseSpeed (units/sec).
-    // Returns true once fully back at rest.
-    public bool MoveToDepth(float targetDepth, float riseSpeed)
+    // Pushed along pushDir (world space, into the surface). Follows a deeper target immediately;
+    // returns toward a shallower one at riseSpeed (units/sec). Returns true once fully back at rest.
+    public bool MoveToDepth(float targetDepth, Vector3 pushDir, float riseSpeed)
     {
-        depth = targetDepth >= depth
-            ? targetDepth
-            : Mathf.MoveTowards(depth, targetDepth, riseSpeed * Time.deltaTime);
+        if (targetDepth >= depth)
+        {
+            depth = targetDepth;
+            this.pushDir = pushDir;
+        }
+        else
+        {
+            depth = Mathf.MoveTowards(depth, targetDepth, riseSpeed * Time.deltaTime);
+        }
 
-        transform.localPosition = new Vector3(basePos.x, basePos.y - depth, basePos.z);
+        Vector3 offset = this.pushDir * depth;
+        if (transform.parent) offset = transform.parent.InverseTransformVector(offset);
+        transform.localPosition = basePos + offset;
         return depth <= 0f;
     }
 }
