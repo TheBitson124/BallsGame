@@ -13,13 +13,11 @@ MonoBehaviour:
   m_Name: MegaMudSphereType
   m_EditorClassIdentifier: 
   stiffness: 1
-  maxSinkDepth: 20
-  neighborFalloff: 0.9
+  maxSinkDepth: 100
+  maxNeighborOffset: 1.5
   damping: 1
   sphereMass: 20
   bounceRestitution: 0
   bounceMinLandingSpeed: 2
-  minReboundSpeed: 99
-  settleTime: 3
-  releaseSpeed: 300
   material: {fileID: 13400000, guid: 359112a3f1db70c4caceacb5634c5c7c, type: 2}
+  visualMaterial: {fileID: 2100000, guid: ab637ed8c76a2304e9ca60689a4ba4c4, type: 2}

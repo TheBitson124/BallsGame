@@ -14,12 +14,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   stiffness: 2000
   maxSinkDepth: 0
-  neighborFalloff: 0
+  maxNeighborOffset: 0
   damping: 30
   sphereMass: 0.1
   bounceRestitution: 0
   bounceMinLandingSpeed: 2
-  minReboundSpeed: 99
-  settleTime: 0.1
-  releaseSpeed: 5
   material: {fileID: 13400000, guid: be7e1a8369c372849849055b5f7c8f76, type: 2}
+  visualMaterial: {fileID: 2100000, guid: 896e097c3c37f58458e45c5071e9ab50, type: 2}

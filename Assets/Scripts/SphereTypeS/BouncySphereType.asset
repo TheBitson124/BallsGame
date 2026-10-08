@@ -13,13 +13,11 @@ MonoBehaviour:
   m_Name: BouncySphereType
   m_EditorClassIdentifier: 
   stiffness: 50
-  maxSinkDepth: 2
-  neighborFalloff: 0.714
+  maxSinkDepth: 10
+  maxNeighborOffset: 1.5
   damping: 0.1
   sphereMass: 0.05
   bounceRestitution: 1.1
   bounceMinLandingSpeed: 1
-  minReboundSpeed: 2
-  settleTime: 0.1
-  releaseSpeed: 20
   material: {fileID: 13400000, guid: be7e1a8369c372849849055b5f7c8f76, type: 2}
+  visualMaterial: {fileID: 2100000, guid: 4abe36b1c1373f64c9b03ddef8f51db3, type: 2}

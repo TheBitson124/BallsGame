@@ -14,6 +14,8 @@ public class SpringSphere : MonoBehaviour
     private Rigidbody rb;
     private SphereCollider sphereCollider;
     private ConfigurableJoint joint;
+    private ConfigurableJoint travelLimit;
+    private Vector3 restPosition;
     private Vector3 normal;          // world direction the sphere slides along
     private Rigidbody lander;       // what landed on it hard enough to be bounced back
     private Vector3 outDir;         // from the surface toward the lander's side
@@ -50,6 +52,20 @@ public class SpringSphere : MonoBehaviour
         landingSlide = Vector3.ProjectOnPlane(rel, dir);
     }
 
+    // Walking into the side of a raised sphere only pushes it sideways, which the joint ignores.
+    // Turn that shove into a push into the surface so it sinks and lets the pusher step in.
+    // The contact impulse is only sideways while something presses against it, so just touching it does nothing.
+    void OnCollisionStay(Collision collision)
+    {
+        if (!joint || sphereType.sidePushSink <= 0f || !collision.rigidbody) return;
+
+        float side = Vector3.Dot(collision.rigidbody.worldCenterOfMass - rb.position, normal);
+        Vector3 dir = side >= 0f ? normal : -normal;
+
+        float sideways = Vector3.ProjectOnPlane(collision.impulse, normal).magnitude / Time.fixedDeltaTime;
+        rb.AddForce(-dir * sideways * sphereType.sidePushSink);
+    }
+
     // The spring threw the lander back out: top it up to the bounce speed and give back the slide
     // speed the landing took. Max, so the other spheres it was on don't stack the top-up.
     void OnCollisionExit(Collision collision)
@@ -68,6 +84,19 @@ public class SpringSphere : MonoBehaviour
         body.velocity = slide + outDir * outSpeed;
     }
 
+    // Sink speed is about load / damping, so dividing damping scales it directly
+    private float Damping => sphereType.damping / sphereType.sinkSpeedMultiplier;
+
+    // Sphere type lengths are in sphere diameters; this is one diameter in world units
+    private float SphereSize
+    {
+        get
+        {
+            var spawner = GetComponentInParent<GridSpawner>();
+            return spawner ? spawner.WorldSphereSize : sphereCollider.radius * 2f * transform.lossyScale.x;
+        }
+    }
+
     public void SetType(SphereTypeScriptableObject type)
     {
         sphereType = type;
@@ -79,6 +108,9 @@ public class SpringSphere : MonoBehaviour
         // Awake doesn't run for objects spawned in edit mode, so fetch lazily
         if (!sphereCollider) sphereCollider = GetComponent<SphereCollider>();
         sphereCollider.sharedMaterial = sphereType.material;
+        // sharedMaterial, so edit-mode spawning doesn't leak a material copy per sphere
+        if (sphereType.visualMaterial && TryGetComponent<MeshRenderer>(out var meshRenderer))
+            meshRenderer.sharedMaterial = sphereType.visualMaterial;
         if (!Application.isPlaying || !rb) return;
 
         bool rigid = sphereType.maxSinkDepth <= 0f;
@@ -92,39 +124,56 @@ public class SpringSphere : MonoBehaviour
         if (rigid) return;
 
         // Created once at the rest position: the joint anchors to wherever the sphere is now
-        if (!joint) joint = CreateJoint();
-        joint.linearLimit = new SoftJointLimit { limit = sphereType.maxSinkDepth };
+        if (!joint)
+        {
+            restPosition = rb.position;
+            joint = CreateJoint();
+            travelLimit = CreateTravelLimit();
+        }
+        // A joint limit is symmetric around its anchor, so center it half the depth below rest:
+        // the sphere can sink up to maxSinkDepth but never rise above where it started
+        float half = sphereType.maxSinkDepth * SphereSize * 0.5f;
+        travelLimit.connectedAnchor = restPosition - normal * half;
+        travelLimit.linearLimit = new SoftJointLimit { limit = half };
         joint.xDrive = new JointDrive
         {
             positionSpring = sphereType.stiffness,
-            positionDamper = sphereType.damping,
+            positionDamper = Damping,
             maximumForce = float.MaxValue,
         };
     }
 
-    // Ties this sphere to a neighbor with a spring along the normal, so pushing one drags the other partway.
-    // For a sphere between neighbors: dip = link * (sum of neighbor dips) / (stiffness + link * neighbors),
-    // and link = stiffness * f / (1 - f)^2 makes each ring out sink about f times the ring before it.
+    // Ties this sphere to a neighbor so their heights along the normal never differ by more than maxNeighborOffset.
+    // Below that they move freely; at it, the pushed sphere drags the neighbor along, which drags the next one,
+    // so a deep push leaves a cone-shaped pit with each ring maxNeighborOffset higher than the one inside it.
+    // neighborPull < 1 makes the limit a spring instead: each pulled sphere's own spring soaks up part of the pull,
+    // so it fades ring by ring. At 0.5 the pull equals the sphere's own stiffness and roughly 40% of the
+    // overshoot past the offset carries on to the next ring.
     public void LinkTo(SpringSphere other)
     {
-        float f = sphereType.neighborFalloff;
-        if (!joint || !other.joint || f <= 0f) return;
-        float scale = f / ((1f - f) * (1f - f));
+        float maxOffset = sphereType.maxNeighborOffset * SphereSize;
+        if (!joint || !other.joint || maxOffset <= 0f) return;
 
-        // Every axis left free: the spheres' own joints already keep them in place, this only adds the spring
+        // Only the slide axis is limited: the spheres' own joints already keep them in place sideways
         var link = gameObject.AddComponent<ConfigurableJoint>();
         link.connectedBody = other.rb;
         link.axis = joint.axis;
         link.secondaryAxis = joint.secondaryAxis;
-        link.xDrive = new JointDrive
+        link.xMotion = ConfigurableJointMotion.Limited;
+        link.linearLimit = new SoftJointLimit { limit = maxOffset };
+
+        // Spring 0 = hard limit
+        float p = sphereType.neighborPull;
+        if (p >= 1f) return;
+        float scale = p / (1f - p);
+        link.linearLimitSpring = new SoftJointLimitSpring
         {
-            positionSpring = sphereType.stiffness * scale,
-            positionDamper = sphereType.damping * scale,
-            maximumForce = float.MaxValue,
+            spring = sphereType.stiffness * scale,
+            damper = Damping * scale,
         };
     }
 
-    // Slides only along the grid normal, either way, so it can be pushed from both sides
+    // Slides only along the grid normal and springs back to rest. How far it can slide is the travel limit's job.
     private ConfigurableJoint CreateJoint()
     {
         var grid = GetComponentInParent<SpringGrid>();
@@ -134,12 +183,24 @@ public class SpringSphere : MonoBehaviour
         var j = gameObject.AddComponent<ConfigurableJoint>();
         j.axis = axis;
         j.secondaryAxis = Vector3.Cross(axis, Mathf.Abs(axis.x) < 0.9f ? Vector3.right : Vector3.up);
-        j.xMotion = ConfigurableJointMotion.Limited;
+        j.xMotion = ConfigurableJointMotion.Free;
         j.yMotion = ConfigurableJointMotion.Locked;
         j.zMotion = ConfigurableJointMotion.Locked;
         j.angularXMotion = ConfigurableJointMotion.Locked;
         j.angularYMotion = ConfigurableJointMotion.Locked;
         j.angularZMotion = ConfigurableJointMotion.Locked;
+        return j;
+    }
+
+    // Separate joint because the spring's rest point and the limit's center can't differ on one joint.
+    // Only limits the slide; everything else is left to the main joint.
+    private ConfigurableJoint CreateTravelLimit()
+    {
+        var j = gameObject.AddComponent<ConfigurableJoint>();
+        j.axis = joint.axis;
+        j.secondaryAxis = joint.secondaryAxis;
+        j.autoConfigureConnectedAnchor = false;
+        j.xMotion = ConfigurableJointMotion.Limited;
         return j;
     }
 
