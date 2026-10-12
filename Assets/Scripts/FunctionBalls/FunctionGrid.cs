@@ -37,9 +37,15 @@ public class FunctionGrid : MonoBehaviour
     [Tooltip("Gap to a ball under the player that still counts as standing on it, in local units")]
     [Min(0f)] public float touchDistance = 0.05f;
 
+    [Header("Debug")]
+    [Tooltip("Logs to the console whenever this grid flattens its hole or resets the player's run of bounces, with the reason and what it had reached")]
+    public bool logResets = true;
+
     // Share of an overlap pushed out per physics step. 1 = all at once, which overshoots into a small bounce
     private const float PushOut = 0.3f;
     private const int SolverIterations = 4;
+    // Speed out of the surface (grid units/s) beyond what the grid itself gave the player that counts as a jump
+    private const float JumpSpeed = 1f;
 
     // Distance between neighboring ball centers, in local units
     public float CellSize => spacing * sphereSize;
@@ -72,10 +78,20 @@ public class FunctionGrid : MonoBehaviour
     private float dipTarget;
     private float launchSpeed;
     private bool touching;            // standing on the balls at the start of the last step
+    private Vector3 holeCenter;       // grid space; follows the player, stays put while waiting for the reset
+    private bool waitingForReset;     // the player left: the hole goes back to rest where it was before resetting
     private bool wasTouching;
     private bool carriedLastStep;     // last step set the player's speed out of the surface (dip or launch)
     private float rideSpeed;          // how fast the balls the player stood on rose last step, grid units/s
+    private float lastSetSpeed;       // vertical speed this grid left the player with last step, grid units/s
     private float fallSpeed;          // speed into the surface during the last step in the air
+
+    // Run of bounces: starts with the first landing on a type and lasts until the player leaves the grid.
+    // Its bounce starts at the type's and fades to 1 over the type's maxBounceCount bounces.
+    private FunctionSphereType runType;    // type the run is on; null = no run
+    private float runBounce;               // bounce for the next landing of the run
+    private float runLaunch;               // last launch speed of the run, grid units/s
+    private bool runLastCounted;           // the last landing was fast enough to count toward maxBounceCount
 
     private int Count => types != null ? types.Length : 0;
     private Mesh Mesh => ballMesh ? ballMesh : Resources.GetBuiltinResource<Mesh>("Sphere.fbx");
@@ -143,6 +159,27 @@ public class FunctionGrid : MonoBehaviour
 #endif
     }
 
+    // The balls are only drawn, so the Scene view has nothing to click on. An invisible box over the balls at rest
+    // gives it something: clicking anywhere on the grid selects it (Gizmos must be on in the Scene view).
+    void OnDrawGizmos()
+    {
+        Gizmos.matrix = transform.localToWorldMatrix;
+        Gizmos.color = Color.clear;
+        Gizmos.DrawCube(Vector3.zero, GridSize);
+    }
+
+    // Outline while selected, to see the area the grid covers
+    void OnDrawGizmosSelected()
+    {
+        Gizmos.matrix = transform.localToWorldMatrix;
+        Gizmos.color = new Color(1f, 0.8f, 0.2f, 0.8f);
+        Gizmos.DrawWireCube(Vector3.zero, GridSize);
+    }
+
+    // Local size of the balls at rest, edge to edge
+    private Vector3 GridSize =>
+        new Vector3((columns - 1) * CellSize + sphereSize, sphereSize, (rows - 1) * CellSize + sphereSize);
+
     void Start()
     {
         if (!Application.isPlaying) return;
@@ -178,7 +215,10 @@ public class FunctionGrid : MonoBehaviour
         phase = Phase.Settle;
         holeDepth = 0f;
         touching = wasTouching = carriedLastStep = false;
+        EndRun("grid rebuilt");
+        waitingForReset = false;
         rideSpeed = 0f;
+        lastSetSpeed = 0f;
         deepest = sphereType ? sphereType.DeepestDepth : 0f;
         highest = sphereType ? sphereType.HighestRise : 0f;
 
@@ -257,24 +297,47 @@ public class FunctionGrid : MonoBehaviour
         if (!GetCapsule(out Vector3 a, out Vector3 b, out float radius))
         {
             System.Array.Clear(height, 0, height.Length);
-            phase = Phase.Settle;
-            holeDepth = 0f;
+            EndRun("no player to follow");
+            ResetHole("no player to follow");
+            waitingForReset = false;
             touching = wasTouching = carriedLastStep = false;
             rideSpeed = 0f;
+            lastSetSpeed = 0f;
             return;
+        }
+
+        // Leaving the grid starts the wait for its reset: the hole stays where the player left it and goes back to
+        // rest there (see SettleBack). Already at rest, there's nothing to wait for.
+        if (!waitingForReset && !OverGrid(a))
+        {
+            if (holeDepth != 0f || phase != Phase.Settle)
+            {
+                waitingForReset = true;
+                if (logResets)
+                    Debug.Log($"[{name}] player left the grid: waiting for the balls to go back to rest ({holeDepth:0.###} deep)", this);
+            }
+            else EndRun("player left the grid");
         }
 
         float oldDepth = holeDepth;
         FunctionSphereType ground = GroundType(a);
-        bool carry = UpdateHole(ground, OverGrid(a), out float carrySpeed);
+        bool carry = false;
+        float carrySpeed = 0f;
+        if (waitingForReset) SettleBack();
+        else
+        {
+            holeCenter = a;
+            carry = UpdateHole(ground, OverGrid(a), out carrySpeed);
+        }
 
         // Balls only give way as far as the player presses in: the player's lowest point below the tops of
         // balls at rest. In the air, or standing on something above the grid, nothing presses and the grid is flat.
-        float press = Mathf.Max(0f, sphereSize * 0.5f - (a.y - radius));
+        // A hole left behind while waiting for the reset isn't the player's any more, so it shows in full.
+        float press = waitingForReset ? float.MaxValue : Mathf.Max(0f, sphereSize * 0.5f - (a.y - radius));
         for (int i = 0; i < height.Length; i++)
-            height[i] = -Mathf.Min(HoleDepth(i, a, holeDepth), press);
+            height[i] = -Mathf.Min(HoleDepth(i, holeCenter, holeDepth), press);
 
-        SolveContacts(a, b, radius, ground, oldDepth, carry, carrySpeed);
+        SolveContacts(a, b, radius, GroundType(holeCenter), oldDepth, carry, carrySpeed);
         if (touching) player.ReportSlowdown(ground.playerSlowdown);
     }
 
@@ -303,8 +366,7 @@ public class FunctionGrid : MonoBehaviour
                 dipTarget = target;
                 holeSpeed = fallSpeed;
                 holeAccel = -fallSpeed * fallSpeed / (2f * (target - holeDepth));
-                launchSpeed = fallSpeed * ground.bounce;
-                if (ground.maxBounceSpeed > 0f) launchSpeed = Mathf.Min(launchSpeed, ground.maxBounceSpeed);
+                launchSpeed = BounceLaunch(ground, fallSpeed);
             }
         }
 
@@ -353,6 +415,68 @@ public class FunctionGrid : MonoBehaviour
                 holeDepth = Mathf.MoveTowards(holeDepth, rest, speed * dt);
                 return false;
         }
+    }
+
+    // Launch speed for a landing. A run of bounces starts at the type's bounce, and every counted bounce cuts
+    // what's left above 1 until it reaches 1 after maxBounceCount: bouncing climbs quickly at first, then holds.
+    // Only landings at minBounceSpeed or faster count. Slower ones bounce at the current value without using it up,
+    // so a run that starts with small hops isn't spent before it gets going.
+    // A counted landing right after a counted launch is measured against that launch, so jumping on each bounce
+    // can't keep pushing the player higher. Anything else counts in full: the run's first landing (coming in from
+    // higher ground sets a higher height to hold) and the first landing fast enough to count after small hops.
+    private float BounceLaunch(FunctionSphereType ground, float landingSpeed)
+    {
+        if (runType != ground)
+        {
+            if (runType) EndRun($"landed on {ground.name}");
+            runType = ground;
+            runBounce = ground.bounce;
+            runLastCounted = false;
+        }
+
+        bool counts = landingSpeed >= ground.minBounceSpeed;
+        if (counts && runLastCounted) landingSpeed = Mathf.Min(landingSpeed, runLaunch);
+        runLaunch = landingSpeed * runBounce;
+        if (counts) runBounce = ground.NextBounce(runBounce);
+        runLastCounted = counts;
+        return runLaunch;
+    }
+
+    // Waiting for the reset after the player left: the hole goes back to rest where it was left, at its type's
+    // riseSpeed, and nothing the player does changes it. Once it's flat every ball is back at rest, and the grid
+    // resets: the run of bounces ends and the hole follows the player again, starting flat (so a raised platform
+    // only grows once the player stands on it again). Ball types and colors are never touched.
+    private void SettleBack()
+    {
+        wasTouching = touching;   // no landing is missed or invented when the hole follows the player again
+        phase = Phase.Settle;
+        holeSpeed = 0f;
+        holeDepth = Mathf.MoveTowards(holeDepth, 0f, GroundType(holeCenter).riseSpeed * Time.fixedDeltaTime);
+        if (holeDepth != 0f) return;
+
+        waitingForReset = false;
+        if (logResets) Debug.Log($"[{name}] all balls back at rest: grid reset", this);
+        EndRun("player left the grid");
+    }
+
+    // Flattens the hole under the player at once and drops any dip or bounce in progress
+    private void ResetHole(string reason)
+    {
+        if (holeDepth == 0f && phase == Phase.Settle) return;
+        if (logResets)
+            Debug.Log($"[{name}] hole reset to flat: {reason}. It was {holeDepth:0.###} deep ({phase})", this);
+        holeDepth = 0f;
+        holeSpeed = 0f;
+        phase = Phase.Settle;
+    }
+
+    // Ends the run of bounces, so the next landing starts again from its type's full bounce
+    private void EndRun(string reason)
+    {
+        if (!runType) return;
+        if (logResets)
+            Debug.Log($"[{name}] bounce run on {runType.name} reset: {reason}. Bounce had reached {runBounce:0.###} (starts at {runType.bounce:0.###}), last launch {runLaunch:0.##} units/s", this);
+        runType = null;
     }
 
     private float HoleDepth(int i, Vector3 player, float depth)
@@ -404,8 +528,20 @@ public class FunctionGrid : MonoBehaviour
         float peakFrom = -ground.ClampDepth(oldDepth);
         float peakSpeed = (-ground.ClampDepth(holeDepth) - peakFrom) / dt;
 
+        // A jump the controller added last step is in the velocity now: compared to the speed this grid left the
+        // player with last step (plus gravity since), they move out of the surface clearly faster. Then let them go
+        // instead of pulling them back into the dip (or, at the top of a bounce, they already go faster than the
+        // launch). Not compared to the carry itself: on a landing the contacts stop the player a step before the
+        // dip starts pulling, and that difference isn't a jump.
+        float gravityStep = playerBody.useGravity ? transform.InverseTransformDirection(Physics.gravity * dt).y / scale : 0f;
+        bool jumped = v.y > lastSetSpeed + gravityStep + JumpSpeed;
+        if (carry && jumped)
+        {
+            carry = false;
+            if (phase == Phase.Dip) phase = Phase.Settle;
+        }
         // Velocity change, so a jump the controller added this step still goes on top
-        if (carry) v.y = carrySpeed;
+        else if (carry) v.y = carrySpeed;
         // Riding the surface: the balls under the player rose at rideSpeed last step and carried them along.
         // Take back whatever part of it the ground no longer moves at, so when a rising mound (or a bounce settling
         // back) stops, they stop with it instead of flying on. Only that ground speed is taken back: a jump is on
@@ -420,6 +556,7 @@ public class FunctionGrid : MonoBehaviour
             touching = false;
             fallSpeed = speedIn;
             rideSpeed = 0f;
+            lastSetSpeed = v.y;
             return;
         }
 
@@ -433,11 +570,11 @@ public class FunctionGrid : MonoBehaviour
                 {
                     int i = x + z * columns;
                     Vector3 s = CellPosition(x, z);
-                    s.y = -HoleDepth(i, a, oldDepth);
-                    Contact(s, (-HoleDepth(i, a, holeDepth) - s.y) / dt);
+                    s.y = -HoleDepth(i, holeCenter, oldDepth);
+                    Contact(s, (-HoleDepth(i, holeCenter, holeDepth) - s.y) / dt);
                 }
             }
-            if (overGrid) Contact(new Vector3(a.x, peakFrom, a.z), peakSpeed);
+            if (OverGrid(holeCenter)) Contact(new Vector3(holeCenter.x, peakFrom, holeCenter.z), peakSpeed);
         }
 
         // One ball at s, moving up at ballSpeed this step
@@ -464,6 +601,7 @@ public class FunctionGrid : MonoBehaviour
         // The ground's own speed, not the player's: a jump is in the player's velocity from the next step on
         // and must not count as speed the balls gave them
         rideSpeed = supportSpeed;
+        lastSetSpeed = v.y;   // before a jump this step: that shows up in the velocity next step
         playerBody.AddForce(transform.TransformDirection(v) * scale - worldVelocity, ForceMode.VelocityChange);
         player.ReportGround(grounded);
 

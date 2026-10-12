@@ -29,11 +29,35 @@ public class FunctionSphereType : ScriptableObject
     [Min(0.01f)] public float fullLandingSpeed = 10f;
     [Tooltip("Landings slower than this (units/s) don't dip, so stepping off a ledge doesn't bounce you")]
     [Min(0f)] public float minLandingSpeed = 2f;
-    [Tooltip("Share of the landing speed you're thrown back out with. 0 = you settle back to restDepth (mud), 1 = back up as high as you fell from")]
+    [Tooltip("Share of the landing speed you're thrown back out with on the first bounce. 0 = you settle back to restDepth (mud), 1 = back up as high as you fell from. Above 1, later bounces fade it back to 1 over maxBounceCount bounces, so bouncing climbs and then holds its height until the player leaves the grid")]
     [FormerlySerializedAs("bounceBoost")]
     [Min(0f)] public float bounce = 0f;
-    [Tooltip("Fastest you're thrown back out, units/s, whatever the landing speed and bounce. Keeps bounce above 1 from growing forever. 0 = no limit")]
-    [Min(0f)] public float maxBounceSpeed = 0f;
+    [Tooltip("Bounces it takes for a bounce above 1 to fade back to 1 (each one cuts the same share of what's left above 1). After that the player bounces back exactly as high every time, and jumping doesn't add to it")]
+    [Min(1)] public int maxBounceCount = 5;
+    [Tooltip("Landings slower than this (units/s) don't count toward maxBounceCount: they bounce at the current value without fading it, so small hops can't use the climb up. 0 = every bounce counts")]
+    [Min(0f)] public float minBounceSpeed = 4f;
+
+    // Each bounce keeps this share of the bounce above 1; under BounceDone above 1 it counts as 1.
+    // Worked out from bounce and maxBounceCount so the fade reaches BounceDone exactly at the last counted bounce.
+    public const float BounceDone = 0.01f;
+    public float BounceFade { get; private set; }
+
+    void OnEnable() => UpdateBounceFade();
+    void OnValidate() => UpdateBounceFade();
+
+    private void UpdateBounceFade()
+    {
+        float excess = bounce - 1f;
+        BounceFade = excess > BounceDone ? Mathf.Pow(BounceDone / excess, 1f / Mathf.Max(1, maxBounceCount)) : 0f;
+    }
+
+    // The bounce for the landing after one that used this bounce
+    public float NextBounce(float current)
+    {
+        if (current <= 1f) return current;
+        float excess = (current - 1f) * BounceFade;
+        return excess < BounceDone * 1.001f ? 1f : 1f + excess;
+    }
 
     [Header("Player")]
     [Tooltip("Slows the player standing on it. 0 = full speed, 1 = can't move")]

@@ -16,10 +16,12 @@ MonoBehaviour:
   holeWidth: 2
   sinkSpeed: 6
   riseSpeed: 6
+  holdWhileAirborne: 0
   landingDepth: 1
   fullLandingSpeed: 10
-  minLandingSpeed: 0
+  minLandingSpeed: 3
   bounce: 1.5
-  maxBounceSpeed: 1000
-  playerSlowdown: 0.646
+  maxBounceCount: 4
+  minBounceSpeed: 10
+  playerSlowdown: 0.405
   color: {r: 0, g: 0.08247185, b: 1, a: 1}

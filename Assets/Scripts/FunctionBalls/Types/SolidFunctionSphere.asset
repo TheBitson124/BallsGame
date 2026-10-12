@@ -20,6 +20,7 @@ MonoBehaviour:
   fullLandingSpeed: 10
   minLandingSpeed: 0
   bounce: 0
-  maxBounceSpeed: 0
+  maxBounceCount: 5
+  minBounceSpeed: 4
   playerSlowdown: 0
   color: {r: 0.3962264, g: 0.3962264, b: 0.3962264, a: 1}
