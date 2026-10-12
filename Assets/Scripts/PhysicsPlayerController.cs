@@ -12,6 +12,8 @@ public class PhysicsPlayerController : MonoBehaviour
     [Tooltip("How fast input changes velocity in the air, m/s per second")]
     public float airAcceleration = 5.0f;
     public float jumpHeight = 1.5f;
+    [Tooltip("How hard ground slowdown brakes horizontal speed, per second at 100%. Higher = sticks faster")]
+    public float slowdownDrag = 10.0f;
 
     [Header("Camera Settings")]
     public Transform cameraTransform;
@@ -25,6 +27,8 @@ public class PhysicsPlayerController : MonoBehaviour
     private bool jumpRequested;
     private bool isGrounded;
     private bool groundContact;   // collected from collisions during the physics step
+    private float slowdown;          // 0..1, from the ground under the player
+    private float slowdownContact;   // collected like groundContact
 
     void Start()
     {
@@ -56,18 +60,22 @@ public class PhysicsPlayerController : MonoBehaviour
     {
         isGrounded = groundContact;
         groundContact = false;
+        slowdown = slowdownContact;
+        slowdownContact = 0f;
 
         rb.MoveRotation(Quaternion.Euler(0f, yaw, 0f));
 
         // Steer horizontal velocity toward the input; anything else (e.g. a bounce) fades out at the same rate
         Vector3 forward = Quaternion.Euler(0f, yaw, 0f) * Vector3.forward;
         Vector3 right = Quaternion.Euler(0f, yaw, 0f) * Vector3.right;
-        Vector3 targetVelocity = (right * moveInput.x + forward * moveInput.y).normalized * moveSpeed;
+        Vector3 targetVelocity = (right * moveInput.x + forward * moveInput.y).normalized * moveSpeed * (1f - slowdown);
 
         Vector3 velocity = rb.velocity;
         Vector3 horizontal = new Vector3(velocity.x, 0f, velocity.z);
         float accel = isGrounded ? groundAcceleration : airAcceleration;
         Vector3 newHorizontal = Vector3.MoveTowards(horizontal, targetVelocity, accel * Time.fixedDeltaTime);
+        // Slowing ground drags on top of that: bounces and slides die out faster, 100% stops the player
+        newHorizontal *= Mathf.Exp(-slowdown * slowdownDrag * Time.fixedDeltaTime);
         rb.AddForce(newHorizontal - horizontal, ForceMode.VelocityChange);
 
         // Jump: initial velocity needed to reach jumpHeight, added on top of any upward push
@@ -80,6 +88,12 @@ public class PhysicsPlayerController : MonoBehaviour
         }
         jumpRequested = false;
     }
+
+    // Grounds that aren't colliders (FunctionGrid) report here; read at the start of the next FixedUpdate, like collisions
+    public void ReportGround(bool onGround) => groundContact |= onGround;
+
+    // Ground that slows the player (0 = none, 1 = can't move) reports here each step; the strongest one wins
+    public void ReportSlowdown(float amount) => slowdownContact = Mathf.Max(slowdownContact, Mathf.Clamp01(amount));
 
     void OnCollisionStay(Collision collision)
     {

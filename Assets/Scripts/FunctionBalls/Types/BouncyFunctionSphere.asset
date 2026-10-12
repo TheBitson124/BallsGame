@@ -1,0 +1,25 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d08192a945e7460c8a707617c30370d6, type: 3}
+  m_Name: BouncyFunctionSphere
+  m_EditorClassIdentifier: 
+  restDepth: 0.5
+  holeWidth: 2
+  sinkSpeed: 6
+  riseSpeed: 6
+  landingDepth: 1
+  fullLandingSpeed: 10
+  minLandingSpeed: 0
+  bounce: 1.5
+  maxBounceSpeed: 1000
+  playerSlowdown: 0.646
+  color: {r: 0, g: 0.08247185, b: 1, a: 1}
