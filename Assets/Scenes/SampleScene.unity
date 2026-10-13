@@ -152,7 +152,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   rows: 20
-  columns: 20
+  columns: 22
   sphereSize: 0.8
   spacing: 0.7
   sphereType: {fileID: 11400000, guid: 61af03c6106f4b34eaf77a42a577f82c, type: 2}
@@ -172,7 +172,7 @@ Transform:
   m_GameObject: {fileID: 76319142}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -39.53, y: 4.52, z: -2.17}
+  m_LocalPosition: {x: -39.34, y: 5.7, z: -2.17}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []

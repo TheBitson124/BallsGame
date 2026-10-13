@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d08192a945e7460c8a707617c30370d6, type: 3}
   m_Name: ReverseFunctionBalls
   m_EditorClassIdentifier: 
-  restDepth: -10
+  restDepth: -5
   holeWidth: 10
   sinkSpeed: 5
   riseSpeed: 20
