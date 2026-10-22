@@ -3,7 +3,7 @@ using UnityEngine;
 // Rigidbody player: surfaces push it with real forces, so bounces leave it with real velocity.
 // Input only steers the velocity with limited acceleration instead of overwriting it.
 [RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
-public class PhysicsPlayerController : MonoBehaviour
+public class PhysicsPlayerController : MonoBehaviour, IFunctionGridBody
 {
     [Header("Movement Settings")]
     public float moveSpeed = 5.0f;
@@ -21,6 +21,7 @@ public class PhysicsPlayerController : MonoBehaviour
     public float verticalLookLimit = 80.0f;
 
     private Rigidbody rb;
+    private CapsuleCollider capsule;
     private float cameraPitch;
     private float yaw;
     private Vector2 moveInput;
@@ -88,6 +89,9 @@ public class PhysicsPlayerController : MonoBehaviour
         }
         jumpRequested = false;
     }
+
+    public Rigidbody Body => rb ? rb : rb = GetComponent<Rigidbody>();
+    public CapsuleCollider Capsule => capsule ? capsule : capsule = GetComponent<CapsuleCollider>();
 
     // Grounds that aren't colliders (FunctionGrid) report here; read at the start of the next FixedUpdate, like collisions
     public void ReportGround(bool onGround) => groundContact |= onGround;

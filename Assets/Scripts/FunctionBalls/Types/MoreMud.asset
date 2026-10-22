@@ -23,5 +23,5 @@ MonoBehaviour:
   bounce: 0
   maxBounceCount: 5
   minBounceSpeed: 4
-  playerSlowdown: 1
+  playerSlowdown: 0.518
   color: {r: 0.089953184, g: 1, b: 0, a: 1}

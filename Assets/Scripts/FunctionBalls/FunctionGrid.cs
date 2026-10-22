@@ -1,12 +1,15 @@
+using System.Linq;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 // A grid of balls with no physics at all: no Rigidbody, no collider, no GameObject per ball.
-// The player's capsule is the only collider. The player bends a height function and the balls follow its samples;
-// this grid stands in for their colliders by keeping the player's velocity out of them.
+// The body (anything that implements IFunctionGridBody, e.g. a crate or a ball) needs one capsule collider.
+// It bends a height function and the balls follow its samples;
+// this grid stands in for their colliders by keeping the body's velocity out of them.
 // All balls are drawn in one instanced call with one material. A ball's color is its type: painting a color turns it
 // into the type with that color, physics and all.
-// Two-sided: whichever side of the grid the player is on is its top, so a tilted or upside-down grid works as a
+// Two-sided: whichever side of the grid the body is on is its top, so a tilted or upside-down grid works as a
 // ceiling too. Jumping into it from below bends it up, landing on it from above bends it down.
 [ExecuteAlways]
 [DefaultExecutionOrder(100)]
@@ -33,22 +36,23 @@ public class FunctionGrid : MonoBehaviour
     [Tooltip("Types the grid starts with, stretched over it: pixel x = column, y = row. Each pixel paints its ball (see paintTypes); transparent pixels leave sphereType. Needs Read/Write enabled in its import settings")]
     public Texture2D paintMap;
 
-    [Header("Player")]
-    [Tooltip("Empty = the first one in the scene")]
-    public PhysicsPlayerController player;
-    [Tooltip("Gap to a ball under the player that still counts as standing on it, in local units")]
+    [Header("Body")]
+    [Tooltip("What the balls react to: any component that implements IFunctionGridBody, or one on the same object. Empty = the first one in the scene")]
+    [FormerlySerializedAs("player")]
+    public MonoBehaviour body;
+    [Tooltip("Gap to a ball under the body that still counts as standing on it, in local units")]
     [Min(0f)] public float touchDistance = 0.05f;
-    [Tooltip("On: the balls give way from both sides, away from the player, so the grid also works as a ceiling or the underside of a slope. Off: only from the grid's own up side")]
+    [Tooltip("On: the balls give way from both sides, away from the body, so the grid also works as a ceiling or the underside of a slope. Off: only from the grid's own up side")]
     public bool twoSided = true;
 
     [Header("Debug")]
-    [Tooltip("Logs to the console whenever this grid flattens its hole or resets the player's run of bounces, with the reason and what it had reached")]
+    [Tooltip("Logs to the console whenever this grid flattens its hole or resets the body's run of bounces, with the reason and what it had reached")]
     public bool logResets = true;
 
     // Share of an overlap pushed out per physics step. 1 = all at once, which overshoots into a small bounce
     private const float PushOut = 0.3f;
     private const int SolverIterations = 4;
-    // Speed out of the surface (grid units/s) beyond what the grid itself gave the player that counts as a jump
+    // Speed out of the surface (grid units/s) beyond what the grid itself gave the body that counts as a jump
     private const float JumpSpeed = 1f;
 
     // Distance between neighboring ball centers, in local units
@@ -61,8 +65,7 @@ public class FunctionGrid : MonoBehaviour
     private Color[] colors;           // what's drawn: each ball's type color
     private Vector4[] drawData;       // xyz = local position, w = diameter
     private Vector3 offset;
-    private Rigidbody playerBody;
-    private CapsuleCollider playerCapsule;
+    private IFunctionGridBody target;   // body, as the interface
 
     // Drawing
     private GraphicsBuffer ballBuffer;
@@ -73,7 +76,7 @@ public class FunctionGrid : MonoBehaviour
     private float deepest;            // deepest any ball's type goes, for the draw bounds
     private float highest;            // highest any ball's type rises above rest, for the draw bounds
 
-    // The hole under the player, in local units: how deep it is right under them, and what it's doing
+    // The hole under the body, in local units: how deep it is right under them, and what it's doing
     private enum Phase { Settle, Dip, Bounce }
     private Phase phase;
     private float holeDepth;
@@ -81,18 +84,18 @@ public class FunctionGrid : MonoBehaviour
     private float holeAccel;          // into the surface; negative slows a dip, positive speeds up a bounce
     private float dipTarget;
     private float launchSpeed;
-    private bool touching;            // against the balls' face on the player's side at the start of the last step
+    private bool touching;            // against the balls' face on the body's side at the start of the last step
     private bool standing;            // touching from above in the world, so the controller counts it as ground
-    private float side = 1f;          // which side of the grid the player is on: 1 = local +y, -1 = local -y
-    private Vector3 holeCenter;       // grid space; follows the player, stays put while waiting for the reset
-    private bool waitingForReset;     // the player left: the hole goes back to rest where it was before resetting
+    private float side = 1f;          // which side of the grid the body is on: 1 = local +y, -1 = local -y
+    private Vector3 holeCenter;       // grid space; follows the body, stays put while waiting for the reset
+    private bool waitingForReset;     // the body left: the hole goes back to rest where it was before resetting
     private bool wasTouching;
-    private bool carriedLastStep;     // last step set the player's speed out of the surface (dip or launch)
-    private float rideSpeed;          // how fast the balls the player stood on rose last step, grid units/s
-    private float lastSetSpeed;       // vertical speed this grid left the player with last step, grid units/s
+    private bool carriedLastStep;     // last step set the body's speed out of the surface (dip or launch)
+    private float rideSpeed;          // how fast the balls the body stood on rose last step, grid units/s
+    private float lastSetSpeed;       // vertical speed this grid left the body with last step, grid units/s
     private float fallSpeed;          // speed into the surface during the last step in the air
 
-    // Run of bounces: starts with the first landing on a type and lasts until the player leaves the grid.
+    // Run of bounces: starts with the first landing on a type and lasts until the body leaves the grid.
     // Its bounce starts at the type's and fades to 1 over the type's maxBounceCount bounces.
     private FunctionSphereType runType;    // type the run is on; null = no run
     private float runBounce;               // bounce for the next landing of the run
@@ -198,13 +201,16 @@ public class FunctionGrid : MonoBehaviour
         if (!ballMaterial) Debug.LogError($"{name}: FunctionGrid needs a ball material (FunctionBalls/Ball shader)", this);
         RemoveOldBallObjects();
 
-        if (!player) player = FindObjectOfType<PhysicsPlayerController>();
-        if (player)
-        {
-            playerBody = player.GetComponent<Rigidbody>();
-            playerCapsule = player.GetComponent<CapsuleCollider>();
-        }
+        if (!body) body = FindObjectsOfType<MonoBehaviour>().FirstOrDefault(b => b is IFunctionGridBody);
+        target = FindTarget(body);
+        if (body && target == null)
+            Debug.LogError($"{name}: {body.name} has no component that implements IFunctionGridBody", this);
+        body = target as MonoBehaviour;
     }
+
+    // The component itself if it implements IFunctionGridBody, otherwise one on the same object
+    private static IFunctionGridBody FindTarget(MonoBehaviour component) =>
+        !component ? null : component as IFunctionGridBody ?? component.GetComponent<IFunctionGridBody>();
 
     // Fresh grid: every ball of sphereType, or the type its paintMap pixel paints, at rest
     private void Build()
@@ -304,8 +310,8 @@ public class FunctionGrid : MonoBehaviour
         if (!GetCapsule(out Vector3 a, out Vector3 b, out float radius))
         {
             System.Array.Clear(height, 0, height.Length);
-            EndRun("no player to follow");
-            ResetHole("no player to follow");
+            EndRun("no body to follow");
+            ResetHole("no body to follow");
             waitingForReset = false;
             touching = standing = wasTouching = carriedLastStep = false;
             rideSpeed = 0f;
@@ -313,13 +319,13 @@ public class FunctionGrid : MonoBehaviour
             return;
         }
 
-        // From here on y is out of the grid on the player's side, so the hole always goes away from the player
+        // From here on y is out of the grid on the body's side, so the hole always goes away from the body
         UpdateSide((a + b) * 0.5f);
         a = Flip(a);
         b = Flip(b);
         if (a.y > b.y) (a, b) = (b, a);
 
-        // Leaving the grid starts the wait for its reset: the hole stays where the player left it and goes back to
+        // Leaving the grid starts the wait for its reset: the hole stays where the body left it and goes back to
         // rest there (see SettleBack). Already at rest, there's nothing to wait for.
         if (!waitingForReset && !OverGrid(a))
         {
@@ -327,9 +333,9 @@ public class FunctionGrid : MonoBehaviour
             {
                 waitingForReset = true;
                 if (logResets)
-                    Debug.Log($"[{name}] player left the grid: waiting for the balls to go back to rest ({holeDepth:0.###} deep)", this);
+                    Debug.Log($"[{name}] body left the grid: waiting for the balls to go back to rest ({holeDepth:0.###} deep)", this);
             }
-            else EndRun("player left the grid");
+            else EndRun("body left the grid");
         }
 
         float oldDepth = holeDepth;
@@ -344,19 +350,19 @@ public class FunctionGrid : MonoBehaviour
             carry = UpdateHole(ground, OverGrid(a), arrival, arrivalSpeed, out carrySpeed);
         }
 
-        // Balls only give way as far as the player presses in: the player's lowest point below the tops of
+        // Balls only give way as far as the body presses in: the body's lowest point below the tops of
         // balls at rest. In the air, or standing on something above the grid, nothing presses and the grid is flat.
-        // A hole left behind while waiting for the reset isn't the player's any more, so it shows in full.
+        // A hole left behind while waiting for the reset isn't the body's any more, so it shows in full.
         float press = waitingForReset ? float.MaxValue : Mathf.Max(0f, sphereSize * 0.5f - (a.y - radius));
         for (int i = 0; i < height.Length; i++)
             height[i] = -side * Mathf.Min(HoleDepth(i, holeCenter, holeDepth), press);
 
         SolveContacts(a, b, radius, GroundType(holeCenter), oldDepth, carry, carrySpeed);
-        if (standing) player.ReportSlowdown(ground.playerSlowdown);
+        if (standing) target.ReportSlowdown(ground.slowdown);
     }
 
-    // The player's side is the one their capsule's center is on, measured against the balls as they're bent now,
-    // not the flat grid: sinking deep into a hole takes the player below the flat grid without going through it.
+    // The body's side is the one their capsule's center is on, measured against the balls as they're bent now,
+    // not the flat grid: sinking deep into a hole takes the body below the flat grid without going through it.
     // Only clearly past the balls counts as the other side. Going round flattens the hole at once: a hole bent away
     // from the old side would bend toward the new one.
     // center: the capsule's center in grid space, not flipped
@@ -370,29 +376,30 @@ public class FunctionGrid : MonoBehaviour
         if (twoSided && c.y >= sheet - sphereSize * 0.5f) return;
         side = -side;
         if (logResets && (holeDepth != 0f || phase != Phase.Settle))
-            Debug.Log($"[{name}] player went round to the grid's {(side > 0f ? "top" : "underside")}", this);
-        ResetHole("player went round to the other side");
-        EndRun("player went round to the other side");
+            Debug.Log($"[{name}] body went round to the grid's {(side > 0f ? "top" : "underside")}", this);
+        ResetHole("body went round to the other side");
+        EndRun("body went round to the other side");
         waitingForReset = false;
         touching = standing = wasTouching = carriedLastStep = false;
         rideSpeed = 0f;
         lastSetSpeed = -lastSetSpeed;
     }
 
-    // Grid space to and from the player's side: y flipped on the underside. Its own inverse
+    // Grid space to and from the body's side: y flipped on the underside. Its own inverse
     private Vector3 Flip(Vector3 p) => new Vector3(p.x, p.y * side, p.z);
 
-    // Player's velocity by the end of this step if this grid did nothing (gravity included), grid units/s on the
-    // player's side
+    // Body's velocity by the end of this step if this grid did nothing (gravity included), grid units/s on the
+    // body's side
     private Vector3 GridVelocity(out Vector3 worldVelocity)
     {
-        worldVelocity = playerBody.velocity + (playerBody.useGravity ? Physics.gravity * Time.fixedDeltaTime : Vector3.zero);
+        Rigidbody rb = target.Body;
+        worldVelocity = rb.velocity + (rb.useGravity ? Physics.gravity * Time.fixedDeltaTime : Vector3.zero);
         return Flip(transform.InverseTransformDirection(worldVelocity) / transform.lossyScale.x);
     }
 
-    // Whether a player in the air reaches the surface right under them during this step: the share of the step
+    // Whether a body in the air reaches the surface right under them during this step: the share of the step
     // they're still in the air (0 to 1), or -1 if they don't arrive. arrivalSpeed is their speed into the surface.
-    // Lets a landing start the dip in the step the player arrives, so a fast landing sinks straight in instead of
+    // Lets a landing start the dip in the step the body arrives, so a fast landing sinks straight in instead of
     // being stopped dead on the surface for a step and then pulled down again.
     private float Arrival(Vector3 a, float radius, FunctionSphereType ground, out float arrivalSpeed)
     {
@@ -406,22 +413,22 @@ public class FunctionGrid : MonoBehaviour
     }
 
     // Moves the hole one step. A landing dips it, then it comes back up to restDepth: slowly, or for a bouncy type
-    // faster and faster so it throws the player out at the end.
-    // arrival: share of this step before the player reaches the surface, -1 if they don't (see Arrival)
-    // Returns true to set the player's speed out of the surface this step: pulled down with the dip (the contacts
+    // faster and faster so it throws the body out at the end.
+    // arrival: share of this step before the body reaches the surface, -1 if they don't (see Arrival)
+    // Returns true to set the body's speed out of the surface this step: pulled down with the dip (the contacts
     // hold them back to the speed of the balls they actually rest on, which sink slower off-center), and launched
     // at the top of a bounce.
     private bool UpdateHole(FunctionSphereType ground, bool overGrid, float arrival, float arrivalSpeed, out float carrySpeed)
     {
         float dt = Time.fixedDeltaTime;
-        float dipTime = dt;   // a dip starting this step only runs once the player arrives
+        float dipTime = dt;   // a dip starting this step only runs once the body arrives
         carrySpeed = 0f;
         bool arriving = arrival >= 0f;
         bool onIt = touching || arriving;
         bool landed = onIt && !wasTouching;
         wasTouching = onIt;
 
-        // Jumped or walked off mid-dip: the hole just settles, and the player keeps whatever speed they left with
+        // Jumped or walked off mid-dip: the hole just settles, and the body keeps whatever speed they left with
         if (!onIt) phase = Phase.Settle;
 
         if (arriving) fallSpeed = arrivalSpeed;
@@ -430,7 +437,7 @@ public class FunctionGrid : MonoBehaviour
             float target = Mathf.Lerp(ground.restDepth, ground.landingDepth, fallSpeed / ground.fullLandingSpeed);
             if (target > holeDepth + 1e-4f)
             {
-                // Slows the player from their landing speed to a stop exactly at the bottom of the dip
+                // Slows the body from their landing speed to a stop exactly at the bottom of the dip
                 phase = Phase.Dip;
                 dipTarget = target;
                 holeSpeed = fallSpeed;
@@ -462,11 +469,11 @@ public class FunctionGrid : MonoBehaviour
                 return true;
 
             case Phase.Bounce:
-                // The rising balls push the player up through the contacts
+                // The rising balls push the body up through the contacts
                 holeSpeed += holeAccel * dt;
                 holeDepth += holeSpeed * dt;
                 if (holeDepth > ground.restDepth) return false;
-                // Back at the top: the hole stops and the player flies on
+                // Back at the top: the hole stops and the body flies on
                 holeDepth = ground.restDepth;
                 holeSpeed = 0f;
                 phase = Phase.Settle;
@@ -492,7 +499,7 @@ public class FunctionGrid : MonoBehaviour
     // Only landings at minBounceSpeed or faster count. Slower ones bounce at the current value without using it up,
     // so a run that starts with small hops isn't spent before it gets going.
     // A counted landing right after a counted launch is measured against that launch, so jumping on each bounce
-    // can't keep pushing the player higher. Anything else counts in full: the run's first landing (coming in from
+    // can't keep pushing the body higher. Anything else counts in full: the run's first landing (coming in from
     // higher ground sets a higher height to hold) and the first landing fast enough to count after small hops.
     private float BounceLaunch(FunctionSphereType ground, float landingSpeed)
     {
@@ -512,13 +519,13 @@ public class FunctionGrid : MonoBehaviour
         return runLaunch;
     }
 
-    // Waiting for the reset after the player left: the hole goes back to rest where it was left, at its type's
-    // riseSpeed, and nothing the player does changes it. Once it's flat every ball is back at rest, and the grid
-    // resets: the run of bounces ends and the hole follows the player again, starting flat (so a raised platform
-    // only grows once the player stands on it again). Ball types and colors are never touched.
+    // Waiting for the reset after the body left: the hole goes back to rest where it was left, at its type's
+    // riseSpeed, and nothing the body does changes it. Once it's flat every ball is back at rest, and the grid
+    // resets: the run of bounces ends and the hole follows the body again, starting flat (so a raised platform
+    // only grows once the body stands on it again). Ball types and colors are never touched.
     private void SettleBack()
     {
-        wasTouching = touching;   // no landing is missed or invented when the hole follows the player again
+        wasTouching = touching;   // no landing is missed or invented when the hole follows the body again
         phase = Phase.Settle;
         holeSpeed = 0f;
         holeDepth = Mathf.MoveTowards(holeDepth, 0f, GroundType(holeCenter).riseSpeed * Time.fixedDeltaTime);
@@ -526,10 +533,10 @@ public class FunctionGrid : MonoBehaviour
 
         waitingForReset = false;
         if (logResets) Debug.Log($"[{name}] all balls back at rest: grid reset", this);
-        EndRun("player left the grid");
+        EndRun("body left the grid");
     }
 
-    // Flattens the hole under the player at once and drops any dip or bounce in progress
+    // Flattens the hole under the body at once and drops any dip or bounce in progress
     private void ResetHole(string reason)
     {
         if (holeDepth == 0f && phase == Phase.Settle) return;
@@ -549,26 +556,26 @@ public class FunctionGrid : MonoBehaviour
         runType = null;
     }
 
-    private float HoleDepth(int i, Vector3 player, float depth)
+    private float HoleDepth(int i, Vector3 center, float depth)
     {
         Vector3 p = CellPosition(i % columns, i / columns);
         FunctionSphereType type = types[i];
-        return type.Falloff(p.x - player.x, p.z - player.z) * type.ClampDepth(depth);
+        return type.Falloff(p.x - center.x, p.z - center.z) * type.ClampDepth(depth);
     }
 
     // Whether a point is above the grid's balls (not past its edge), in grid space
     private bool OverGrid(Vector3 p) =>
         Mathf.Abs(p.x) <= offset.x + CellSize * 0.5f && Mathf.Abs(p.z) <= offset.z + CellSize * 0.5f;
 
-    // Type of the ball under the player's center; off the grid, the nearest edge ball's
-    private FunctionSphereType GroundType(Vector3 player)
+    // Type of the ball under the body's center; off the grid, the nearest edge ball's
+    private FunctionSphereType GroundType(Vector3 p)
     {
-        int x = Mathf.Clamp(Mathf.RoundToInt((player.x + offset.x) / CellSize), 0, columns - 1);
-        int z = Mathf.Clamp(Mathf.RoundToInt((player.z + offset.z) / CellSize), 0, rows - 1);
+        int x = Mathf.Clamp(Mathf.RoundToInt((p.x + offset.x) / CellSize), 0, columns - 1);
+        int z = Mathf.Clamp(Mathf.RoundToInt((p.z + offset.z) / CellSize), 0, rows - 1);
         return types[x + z * columns];
     }
 
-    // Balls move in physics steps; draw them between the last two, like Rigidbody interpolation does for the player
+    // Balls move in physics steps; draw them between the last two, like Rigidbody interpolation does for the body
     void Update()
     {
         if (rebuild) Build();
@@ -577,20 +584,20 @@ public class FunctionGrid : MonoBehaviour
     }
 
     // Contacts are against the hole, not the drawn heights: the balls give way freely until the hole
-    // is as deep as it is right now, and only there hold the player up.
+    // is as deep as it is right now, and only there hold the body up.
     // Works on velocity like PhysX's own solver, with each ball moving from its place in oldDepth's hole to the
-    // current one this step: speed that would carry the player into a ball by the end of this step is removed,
+    // current one this step: speed that would carry the body into a ball by the end of this step is removed,
     // and an existing overlap is pushed out a share per step on top of following the ball.
-    // Balls the player could only reach this step count too, so a fast fall can't pass through between steps.
-    // On top of the real balls, the function's own peak right under the player holds them up like one more ball,
+    // Balls the body could only reach this step count too, so a fast fall can't pass through between steps.
+    // On top of the real balls, the function's own peak right under the body holds them up like one more ball,
     // so they stand at exactly restDepth (−100 = 100 up) wherever they are between ball centers. That only matters
     // for a mound, where every real ball is off the peak and lower; in a hole the balls around are higher anyway.
-    // carry: the player rides the surface this step, moving out of it at carrySpeed (landing dip and bounce)
+    // carry: the body rides the surface this step, moving out of it at carrySpeed (landing dip and bounce)
     private void SolveContacts(Vector3 a, Vector3 b, float radius, FunctionSphereType ground, float oldDepth, bool carry, float carrySpeed)
     {
         float scale = transform.lossyScale.x;
         float dt = Time.fixedDeltaTime;
-        // Gravity is added after FixedUpdate; include it so a player at rest stays exactly at rest
+        // Gravity is added after FixedUpdate; include it so a body at rest stays exactly at rest
         Vector3 v = GridVelocity(out Vector3 worldVelocity);
         float speedIn = -v.y;
         bool overGrid = OverGrid(a);
@@ -598,11 +605,11 @@ public class FunctionGrid : MonoBehaviour
         float peakSpeed = (-ground.ClampDepth(holeDepth) - peakFrom) / dt;
 
         // A jump the controller added last step is in the velocity now: compared to the speed this grid left the
-        // player with last step (plus gravity since), they move out of the surface clearly faster. Then let them go
+        // body with last step (plus gravity since), they move out of the surface clearly faster. Then let them go
         // instead of pulling them back into the dip (or, at the top of a bounce, they already go faster than the
         // launch). Not compared to the carry itself: a landing that wasn't caught on arrival (a ball off to the side
         // came first) is stopped by the contacts a step before the dip starts pulling, and that difference isn't a jump.
-        float gravityStep = playerBody.useGravity ? side * transform.InverseTransformDirection(Physics.gravity * dt).y / scale : 0f;
+        float gravityStep = target.Body.useGravity ? side * transform.InverseTransformDirection(Physics.gravity * dt).y / scale : 0f;
         bool jumped = v.y > lastSetSpeed + gravityStep + JumpSpeed;
         if (carry && jumped)
         {
@@ -611,7 +618,7 @@ public class FunctionGrid : MonoBehaviour
         }
         // Velocity change, so a jump the controller added this step still goes on top
         else if (carry) v.y = carrySpeed;
-        // Riding the surface: the balls under the player rose at rideSpeed last step and carried them along.
+        // Riding the surface: the balls under the body rose at rideSpeed last step and carried them along.
         // Take back whatever part of it the ground no longer moves at, so when a rising mound (or a bounce settling
         // back) stops, they stop with it instead of flying on. Only that ground speed is taken back: a jump is on
         // top of it in the velocity and stays. Launches (carry) aren't taken back either.
@@ -629,9 +636,9 @@ public class FunctionGrid : MonoBehaviour
             return;
         }
 
-        bool contact = false;      // against the face on the player's side: a floor, slope or ceiling
-        bool grounded = false;     // and that face holds the player up in the world
-        float supportSpeed = 0f;   // how fast the balls the player stands on rise this step
+        bool contact = false;      // against the face on the body's side: a floor, slope or ceiling
+        bool grounded = false;     // and that face holds the body up in the world
+        float supportSpeed = 0f;   // how fast the balls the body stands on rise this step
         bool lastIteration = false;
         for (int iteration = 0; iteration < SolverIterations; iteration++)
         {
@@ -679,12 +686,12 @@ public class FunctionGrid : MonoBehaviour
             if (transform.TransformDirection(Flip(n)).y > 0.5f) grounded = true;
         }
 
-        // The ground's own speed, not the player's: a jump is in the player's velocity from the next step on
+        // The ground's own speed, not the body's: a jump is in the body's velocity from the next step on
         // and must not count as speed the balls gave them
         rideSpeed = supportSpeed;
         lastSetSpeed = v.y;   // before a jump this step: that shows up in the velocity next step
-        playerBody.AddForce(transform.TransformDirection(Flip(v)) * scale - worldVelocity, ForceMode.VelocityChange);
-        player.ReportGround(grounded);
+        target.Body.AddForce(transform.TransformDirection(Flip(v)) * scale - worldVelocity, ForceMode.VelocityChange);
+        target.ReportGround(grounded);
 
         if (!touching) fallSpeed = speedIn;   // came in from the air: the speed a landing starts from
         touching = contact;
@@ -744,23 +751,26 @@ public class FunctionGrid : MonoBehaviour
         return bounds;
     }
 
-    // Centers of the player capsule's two hemispheres and its radius, in grid space
+    // Centers of the body capsule's two hemispheres and its radius, in grid space
     private bool GetCapsule(out Vector3 a, out Vector3 b, out float radius)
     {
         a = b = Vector3.zero;
         radius = 0f;
-        if (!playerBody || !playerCapsule || !playerCapsule.enabled) return false;
+        if (!body || target == null) return false;
+        Rigidbody rb = target.Body;
+        CapsuleCollider capsule = target.Capsule;
+        if (!rb || !capsule || !capsule.enabled) return false;
 
-        int dir = playerCapsule.direction;
-        Vector3 scale = playerCapsule.transform.lossyScale;
+        int dir = capsule.direction;
+        Vector3 scale = capsule.transform.lossyScale;
         float radiusScale = Mathf.Max(Mathf.Abs(scale[(dir + 1) % 3]), Mathf.Abs(scale[(dir + 2) % 3]));
-        float worldRadius = playerCapsule.radius * radiusScale;
-        float half = Mathf.Max(0f, playerCapsule.height * 0.5f * Mathf.Abs(scale[dir]) - worldRadius);
+        float worldRadius = capsule.radius * radiusScale;
+        float half = Mathf.Max(0f, capsule.height * 0.5f * Mathf.Abs(scale[dir]) - worldRadius);
         Vector3 axis = dir == 0 ? Vector3.right : dir == 1 ? Vector3.up : Vector3.forward;
 
         // Rigidbody pose, not the transform: with interpolation the transform lags behind
-        Quaternion rotation = playerBody.rotation;
-        Vector3 center = playerBody.position + rotation * Vector3.Scale(playerCapsule.center, scale);
+        Quaternion rotation = rb.rotation;
+        Vector3 center = rb.position + rotation * Vector3.Scale(capsule.center, scale);
         Vector3 halfSegment = rotation * axis * half;
         a = transform.InverseTransformPoint(center - halfSegment);
         b = transform.InverseTransformPoint(center + halfSegment);
